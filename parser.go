@@ -3,6 +3,8 @@ package delphi
 import (
 	"errors"
 	"io/ioutil"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -14,10 +16,10 @@ func ParseFile(path string) (*File, error) {
 			"delphi.ParseFile: cannot read file '" + path + "': " + err.Error(),
 		)
 	}
-	return ParseCode(code)
+	return ParseCode(path, code)
 }
 
-func ParseCode(code []byte) (*File, error) {
+func ParseCode(path string, code []byte) (*File, error) {
 	code, err := makeUTF8(code)
 	if err != nil {
 		return nil, errors.New(
@@ -26,7 +28,8 @@ func ParseCode(code []byte) (*File, error) {
 	}
 
 	p := parser{
-		tokens: newTokenizer([]rune(string(code))),
+		filePath: path,
+		tokens:   newTokenizer([]rune(string(code))),
 	}
 	err = p.parse()
 	if err != nil {
@@ -47,31 +50,64 @@ type File struct {
 
 type FileType string
 
+func (t FileType) String() string { return string(t) }
+
 const (
-	Program FileType = "program"
-	Unit    FileType = "unit"
-	Package FileType = "package"
-	Library FileType = "library"
+	Program FileType = "program" // .dpr files
+	Library FileType = "library" // .dpr files as well
+	Unit    FileType = "unit"    // .pas files
+	Package FileType = "package" // .dpk files
 )
 
 type parser struct {
-	tokens *tokenizer
-	file   File
+	filePath string
+	tokens   *tokenizer
+	file     File
 }
 
 func (p *parser) parse() error {
 	t := p.nextSolidToken()
 	if isWord(t, "program") {
 		p.file.Type = Program
+	} else if isWord(t, "library") {
+		return errors.New("TODO parse library")
+	} else if isWord(t, "unit") {
+		return errors.New("TODO parse unit")
+	} else if isWord(t, "package") {
+		return errors.New("TODO parse package")
 	} else {
-		return errors.New("TODO keyword 'program' expected")
+		ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(p.filePath)), ".")
+		if ext == "dpr" {
+			return errors.New("DPR file must start with 'program' or 'library' keyword")
+		}
+		return errors.New("Delphi files must start with one of these keywords: 'program', 'library', 'unit', 'package'")
 	}
 
 	t = p.nextSolidToken()
 	if t.tokenType != tokenWord {
-		return errors.New("name expected")
+		return errors.New("missing " + p.file.Type.String() + " name")
 	}
 	p.file.Name = t.text
+
+	t = p.nextSolidToken()
+	if t.tokenType != ';' {
+		return errors.New("missing ';' after " + p.file.Type.String() + " name, found " + t.String())
+	}
+
+	t = p.nextSolidToken()
+	if !isWord(t, "begin") {
+		return errors.New("missing 'begin' at " + p.file.Type.String() + " start, found " + t.String())
+	}
+
+	t = p.nextSolidToken()
+	if !isWord(t, "end") {
+		return errors.New("missing 'end' at end of " + p.file.Type.String() + ", found " + t.String())
+	}
+
+	t = p.nextSolidToken()
+	if t.tokenType != '.' {
+		return errors.New("missing '.' at end of " + p.file.Type.String() + ", found " + t.String())
+	}
 
 	return nil
 }
@@ -106,6 +142,9 @@ func (t *tokenizer) next() token {
 	switch r {
 	case 0:
 		return token{tokenType: tokenEOF, text: "end of file"}
+	case ';', '.':
+		haveType = tokenType(r)
+		t.nextRune()
 	default:
 		if unicode.IsSpace(r) {
 			for unicode.IsSpace(t.nextRune()) {
@@ -118,6 +157,8 @@ func (t *tokenizer) next() token {
 			for word(t.nextRune()) {
 			}
 			haveType = tokenWord
+		} else {
+			text = "TODO handle token start " + string(r)
 		}
 	}
 
@@ -144,6 +185,27 @@ func (t *tokenizer) nextRune() rune {
 type token struct {
 	tokenType tokenType
 	text      string
+}
+
+func (t token) String() string {
+	if 1 <= t.tokenType && t.tokenType <= 127 {
+		return "'" + string(t.tokenType) + "'"
+	}
+
+	switch t.tokenType {
+	case tokenIllegal:
+		return "illegal token (" + t.text + ")"
+	case tokenEOF:
+		return "end of file"
+	case tokenComment:
+		return "comment"
+	case tokenWhiteSpace:
+		return "white space"
+	case tokenWord:
+		return "'" + t.text + "'"
+	default:
+		return "TODO token.String for " + strconv.Itoa(int(t.tokenType))
+	}
 }
 
 type tokenType rune
